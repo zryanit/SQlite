@@ -76,7 +76,8 @@ async function startServer() {
         params.push(`%${filter}%`);
       }
 
-      query += ` LIMIT ? OFFSET ?`;
+      // Ensure stable ordering by rowid or primary key
+      query += ` ORDER BY rowid ASC LIMIT ? OFFSET ?`;
       params.push(Number(limit), Number(offset));
 
       const rows = currentDb.prepare(query).all(...params);
@@ -84,6 +85,30 @@ async function startServer() {
       const total = currentDb.prepare(`SELECT COUNT(*) as count FROM "${table}" ${filter && column ? `WHERE "${column}" LIKE ?` : ""}`).get(filter && column ? `%${filter}%` : [])?.count || 0;
       
       res.json({ rows, columns, total });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/find-offset/:table", (req, res) => {
+    if (!currentDb) return res.status(400).json({ error: "No database loaded" });
+    const { table } = req.params;
+    const { sura, aya } = req.query;
+
+    try {
+      const columns = currentDb.prepare(`PRAGMA table_info("${table}")`).all();
+      const suraCol = columns.find((c: any) => c.name.toLowerCase().includes('sura'))?.name;
+      const ayaCol = columns.find((c: any) => c.name.toLowerCase().includes('aya'))?.name;
+
+      if (!suraCol || !ayaCol) {
+        return res.status(400).json({ error: "Could not identify Surah/Ayat columns" });
+      }
+
+      // Calculate the number of rows before the target Surah/Ayat
+      const query = `SELECT count(*) as offset FROM "${table}" WHERE CAST("${suraCol}" AS INTEGER) < ? OR (CAST("${suraCol}" AS INTEGER) = ? AND CAST("${ayaCol}" AS INTEGER) < ?)`;
+      const result = currentDb.prepare(query).get(Number(sura), Number(sura), Number(aya));
+      
+      res.json({ offset: result.offset });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

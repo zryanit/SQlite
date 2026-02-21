@@ -185,7 +185,7 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-[#F5F5F3]">
       {/* Compact Header */}
-      <header className="border-b border-black/5 p-2 flex items-center justify-between bg-white sticky top-0 z-10 h-12">
+      <header className="border-b border-black/5 p-2 pt-6 sm:pt-2 flex items-center justify-between bg-white sticky top-0 z-10 h-16 sm:h-12">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-black text-white flex items-center justify-center rounded">
             <DbIcon size={16} />
@@ -249,7 +249,7 @@ export default function App() {
         {selectedTable ? (
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Search & Navigation Bar */}
-            <div className="p-2 border-b border-black/5 bg-white flex items-center gap-3 flex-wrap justify-center">
+            <div className="p-4 sm:p-2 border-b border-black/5 bg-white flex items-center gap-3 flex-wrap justify-center">
               <div className="flex items-center gap-2 bg-black/5 rounded px-2 py-1 max-w-xs w-full">
                 <Search size={14} className="opacity-30" />
                 <select 
