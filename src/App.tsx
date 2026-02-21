@@ -113,6 +113,9 @@ export default function App() {
       console.error("Upload failed", err);
     } finally {
       setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""; // Reset to allow re-uploading same file
+      }
     }
   };
 
@@ -226,12 +229,18 @@ export default function App() {
 
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="p-1.5 hover:bg-black/5 rounded transition-colors"
+            className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center"
             title="Upload Database"
           >
-            <Upload size={18} className={isUploading ? "animate-bounce" : ""} />
+            <Upload size={20} className={isUploading ? "animate-bounce" : ""} />
           </button>
-          <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".db,.sqlite,.sqlite3" className="hidden" />
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileUpload} 
+            accept=".db,.sqlite,.sqlite3,application/x-sqlite3,application/octet-stream" 
+            className="fixed -top-full left-0 opacity-0 pointer-events-none" 
+          />
 
           {dbLoaded && (
             <button
