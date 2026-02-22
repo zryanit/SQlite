@@ -230,10 +230,10 @@ export default function App() {
           <button
             onClick={() => fileInputRef.current?.click()}
             className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center gap-1"
-            title="Open Database"
+            title="Load Database"
           >
             <Upload size={20} className={isUploading ? "animate-bounce" : ""} />
-            <span className="text-[10px] font-bold uppercase hidden sm:inline">Open Database</span>
+            <span className="text-[10px] font-bold uppercase hidden sm:inline">Load</span>
           </button>
           <input 
             type="file" 
