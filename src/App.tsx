@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2 } from "lucide-react";
+import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2, Undo2, Redo2, Copy, ClipboardPaste, Trash2, Eraser } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface Column {
@@ -229,10 +229,11 @@ export default function App() {
 
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center"
-            title="Upload Database"
+            className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center gap-1"
+            title="Load Database"
           >
             <Upload size={20} className={isUploading ? "animate-bounce" : ""} />
+            <span className="text-[10px] font-bold uppercase hidden sm:inline">Load</span>
           </button>
           <input 
             type="file" 
@@ -245,10 +246,11 @@ export default function App() {
           {dbLoaded && (
             <button
               onClick={handleDownload}
-              className="p-1.5 hover:bg-black/5 rounded transition-colors"
-              title="Export Database"
+              className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center gap-1"
+              title="Save Database"
             >
-              <Download size={18} />
+              <Download size={20} />
+              <span className="text-[10px] font-bold uppercase hidden sm:inline">Save</span>
             </button>
           )}
         </div>
@@ -375,20 +377,77 @@ export default function App() {
                           return !(name.includes('id') || name.includes('sura') || name.includes('aya') || name.includes('verse') || name.includes('chapter'));
                         }).map(col => {
                           const currentValue = localChanges[col.name] !== undefined ? localChanges[col.name] : (data.rows[focusIndex][col.name] || "");
+                          
+                          const handleToolbarAction = async (action: string) => {
+                            const textarea = document.getElementById(`textarea-${col.name}`) as HTMLTextAreaElement;
+                            if (!textarea) return;
+
+                            textarea.focus();
+
+                            switch (action) {
+                              case 'undo':
+                                document.execCommand('undo');
+                                break;
+                              case 'redo':
+                                document.execCommand('redo');
+                                break;
+                              case 'copy':
+                                const textToCopy = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd) || textarea.value;
+                                await navigator.clipboard.writeText(textToCopy);
+                                break;
+                              case 'paste':
+                                const textToPaste = await navigator.clipboard.readText();
+                                const start = textarea.selectionStart;
+                                const end = textarea.selectionEnd;
+                                const newValue = textarea.value.substring(0, start) + textToPaste + textarea.value.substring(end);
+                                setLocalChanges(prev => ({ ...prev, [col.name]: newValue }));
+                                break;
+                              case 'delete':
+                                const s = textarea.selectionStart;
+                                const e = textarea.selectionEnd;
+                                if (s !== e) {
+                                  const val = textarea.value.substring(0, s) + textarea.value.substring(e);
+                                  setLocalChanges(prev => ({ ...prev, [col.name]: val }));
+                                }
+                                break;
+                              case 'delete-except':
+                                const selection = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
+                                if (selection) {
+                                  setLocalChanges(prev => ({ ...prev, [col.name]: selection }));
+                                }
+                                break;
+                            }
+                          };
+
                           return (
                             <div key={col.name} className="bg-white rounded-2xl border border-black/5 shadow-md overflow-hidden flex flex-col">
-                              <div className="bg-black/[0.02] px-4 py-2 border-b border-black/5 flex items-center justify-between">
-                                <span className="col-header text-[10px]">{col.name}</span>
-                                {localChanges[col.name] !== undefined && (
-                                  <div className="flex items-center gap-1.5">
-                                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                                    <span className="text-[8px] font-mono opacity-40 uppercase">Unsaved</span>
-                                  </div>
-                                )}
+                              <div className="bg-black/[0.02] px-4 py-2 border-b border-black/5 flex items-center justify-between flex-wrap gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="col-header text-[10px]">{col.name}</span>
+                                  {localChanges[col.name] !== undefined && (
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                                      <span className="text-[8px] font-mono opacity-40 uppercase">Unsaved</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Toolbar Buttons (Right to Left order requested: Delete Except, Delete, Paste, Copy, Redo, Undo) */}
+                                <div className="flex items-center gap-1 bg-white/50 p-1 rounded-lg border border-black/5">
+                                  <button onClick={() => handleToolbarAction('undo')} className="p-2 hover:bg-black hover:text-white rounded transition-all" title="Undo"><Undo2 size={18} /></button>
+                                  <button onClick={() => handleToolbarAction('redo')} className="p-2 hover:bg-black hover:text-white rounded transition-all" title="Redo"><Redo2 size={18} /></button>
+                                  <div className="w-px h-6 bg-black/10 mx-1" />
+                                  <button onClick={() => handleToolbarAction('copy')} className="p-2 hover:bg-black hover:text-white rounded transition-all" title="Copy"><Copy size={18} /></button>
+                                  <button onClick={() => handleToolbarAction('paste')} className="p-2 hover:bg-black hover:text-white rounded transition-all" title="Paste"><ClipboardPaste size={18} /></button>
+                                  <div className="w-px h-6 bg-black/10 mx-1" />
+                                  <button onClick={() => handleToolbarAction('delete')} className="p-2 hover:bg-red-500 hover:text-white rounded transition-all" title="Delete Selected Text"><Trash2 size={18} /></button>
+                                  <button onClick={() => handleToolbarAction('delete-except')} className="p-2 hover:bg-red-500 hover:text-white rounded transition-all" title="Delete All Except Selected"><Eraser size={18} /></button>
+                                </div>
                               </div>
                               
                               <div className="relative">
                                 <textarea
+                                  id={`textarea-${col.name}`}
                                   dir="rtl"
                                   value={currentValue}
                                   onChange={(e) => setLocalChanges(prev => ({ ...prev, [col.name]: e.target.value }))}
