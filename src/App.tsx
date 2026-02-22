@@ -38,8 +38,6 @@ export default function App() {
   // Track local changes for auto-save
   const [localChanges, setLocalChanges] = useState<Record<string, string>>({});
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const fetchTables = async () => {
     try {
       const res = await fetch("/api/tables");
@@ -113,9 +111,7 @@ export default function App() {
       console.error("Upload failed", err);
     } finally {
       setIsUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ""; // Reset to allow re-uploading same file
-      }
+      e.target.value = ""; // Reset to allow re-uploading same file
     }
   };
 
@@ -227,21 +223,19 @@ export default function App() {
             <span className="text-[9px] font-mono w-6">{fontSize}px</span>
           </div>
 
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center gap-1"
+          <label
+            className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center gap-1 cursor-pointer"
             title="Load Database"
           >
             <Upload size={20} className={isUploading ? "animate-bounce" : ""} />
             <span className="text-[10px] font-bold uppercase hidden sm:inline">Load</span>
-          </button>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileUpload} 
-            accept=".db,.sqlite,.sqlite3,application/x-sqlite3,application/octet-stream" 
-            className="fixed -top-full left-0 opacity-0 pointer-events-none" 
-          />
+            <input 
+              type="file" 
+              onChange={handleFileUpload} 
+              accept=".db,.sqlite,.sqlite3,application/x-sqlite3,application/octet-stream" 
+              className="hidden" 
+            />
+          </label>
 
           {dbLoaded && (
             <button
