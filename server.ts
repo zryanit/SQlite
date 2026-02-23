@@ -23,32 +23,100 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({ storage });
-
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
   let currentDb: any = null;
   let currentDbPath: string | null = null;
 
+  // Increase limit for large databases
+  const upload = multer({ 
+    storage,
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB
+  });
+
+  // Try to recover last database on startup
+  try {
+    const files = fs.readdirSync(uploadDir)
+      .filter(f => f.startsWith('db-') && f.endsWith('.sqlite'))
+      .sort((a, b) => {
+        const timeA = parseInt(a.split('-')[1]);
+        const timeB = parseInt(b.split('-')[1]);
+        return timeB - timeA;
+      });
+    
+    if (files.length > 0) {
+      const latestFile = path.join(uploadDir, files[0]);
+      console.log(`Recovering latest database: ${latestFile}`);
+      currentDbPath = latestFile;
+      currentDb = new Database(currentDbPath);
+      currentDb.prepare("SELECT 1").get();
+      console.log("Database recovered successfully");
+    }
+  } catch (err) {
+    console.error("Failed to recover database on startup", err);
+  }
+
   // API Routes
+  app.get("/api/health", (req, res) => {
+    res.json({ 
+      status: "ok", 
+      dbLoaded: !!currentDb, 
+      dbPath: currentDbPath ? path.basename(currentDbPath) : null,
+      uploadDirExists: fs.existsSync(uploadDir)
+    });
+  });
+
+  app.get("/api/debug", (req, res) => {
+    try {
+      const files = fs.readdirSync(uploadDir);
+      res.json({
+        uploadDir,
+        files,
+        currentDbPath,
+        dbLoaded: !!currentDb
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/api/upload", upload.single("database"), (req, res) => {
+    console.log("Upload request received");
     if (!req.file) {
+      console.error("Upload failed: No file in request. Check if the field name is 'database'");
       return res.status(400).json({ error: "No file uploaded" });
     }
 
     try {
+      const filePath = req.file.path;
+      console.log(`Received file: ${req.file.originalname}, saved to: ${filePath}, size: ${req.file.size}`);
+      
+      if (!fs.existsSync(filePath)) {
+        throw new Error("Uploaded file not found on disk after multer processed it");
+      }
+
       if (currentDb) {
+        console.log("Closing existing database connection");
         currentDb.close();
       }
-      currentDbPath = req.file.path;
+      
+      currentDbPath = filePath;
+      console.log("Opening new database connection...");
       currentDb = new Database(currentDbPath);
+      
+      // Test the connection
+      const testResult = currentDb.prepare("SELECT 1").get();
+      console.log("Database connection test result:", testResult);
+      
       res.json({ message: "Database uploaded successfully", filename: req.file.originalname });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      console.error("Database initialization failed:", error);
+      res.status(500).json({ error: `Database error: ${error.message}` });
     }
   });
 
@@ -151,6 +219,15 @@ async function startServer() {
       res.sendFile(path.join(__dirname, "dist", "index.html"));
     });
   }
+
+  // Global error handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Unhandled error:", err);
+    res.status(err.status || 500).json({
+      error: err.message || "An internal server error occurred",
+      details: process.env.NODE_ENV !== "production" ? err.stack : undefined
+    });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

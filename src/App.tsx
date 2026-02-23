@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2, Undo2, Redo2, Copy, ClipboardPaste, Trash2, Eraser } from "lucide-react";
+import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2, Undo2, Redo2, Copy, ClipboardPaste, Trash2, Eraser, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface Column {
@@ -17,8 +17,72 @@ interface TableData {
   total: number;
 }
 
+const HighlightedTextarea = ({ 
+  id, 
+  value, 
+  onChange, 
+  fontSize, 
+  placeholder,
+  dir = "rtl"
+}: { 
+  id: string, 
+  value: string, 
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void, 
+  fontSize: number, 
+  placeholder: string,
+  dir?: "rtl" | "ltr"
+}) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = () => {
+    if (textareaRef.current && backdropRef.current) {
+      backdropRef.current.scrollTop = textareaRef.current.scrollTop;
+      backdropRef.current.scrollLeft = textareaRef.current.scrollLeft;
+    }
+  };
+
+  // Sync scroll on value change too (in case of auto-grow or external changes)
+  useEffect(() => {
+    handleScroll();
+  }, [value]);
+
+  const highlightedContent = value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/([.,()])/g, '<span class="bg-yellow-300 text-black">$1</span>') + "\n";
+
+  const sharedStyles = "w-full p-6 sm:p-10 leading-relaxed font-sans text-right whitespace-pre-wrap break-words border-none outline-none m-0";
+
+  return (
+    <div className="relative w-full min-h-[600px] bg-white">
+      <div
+        ref={backdropRef}
+        aria-hidden="true"
+        dir={dir}
+        className={`${sharedStyles} absolute inset-0 pointer-events-none overflow-auto text-black/80`}
+        style={{ fontSize: `${fontSize}px` }}
+        dangerouslySetInnerHTML={{ __html: highlightedContent }}
+      />
+      <textarea
+        id={id}
+        ref={textareaRef}
+        dir={dir}
+        value={value}
+        onChange={onChange}
+        onScroll={handleScroll}
+        style={{ fontSize: `${fontSize}px` }}
+        className={`${sharedStyles} absolute inset-0 w-full h-full bg-transparent resize-none text-transparent caret-black selection:bg-yellow-500/20 selection:text-transparent overflow-auto`}
+        placeholder={placeholder}
+      />
+    </div>
+  );
+};
+
 export default function App() {
   const [dbLoaded, setDbLoaded] = useState(false);
+  const [dbVersion, setDbVersion] = useState(0);
   const [tables, setTables] = useState<string[]>([]);
   const [selectedTable, setSelectedTable] = useState<string>("");
   const [data, setData] = useState<TableData | null>(null);
@@ -28,6 +92,7 @@ export default function App() {
   const [filterColumn, setFilterColumn] = useState("");
   const [loading, setLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize] = useState(50);
 
@@ -39,19 +104,28 @@ export default function App() {
   // Track local changes for auto-save
   const [localChanges, setLocalChanges] = useState<Record<string, string>>({});
   const [changeRowId, setChangeRowId] = useState<any>(null);
+  const [history, setHistory] = useState<Record<string, string[]>>({});
+  const [redoStack, setRedoStack] = useState<Record<string, string[]>>({});
+  const historyTimerRef = useRef<Record<string, any>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchTables = async () => {
     try {
       const res = await fetch("/api/tables");
-      const tables = await res.json();
-      setTables(tables);
-      if (tables.length > 0 && !selectedTable) {
-        setSelectedTable(tables[0]);
+      const result = await res.json();
+      if (res.ok) {
+        setTables(result);
+        setError(null);
+        if (result.length > 0 && !selectedTable) {
+          setSelectedTable(result[0]);
+        }
+      } else {
+        setError(result.error || "Failed to fetch tables");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to fetch tables", err);
+      setError(err.message || "Failed to connect to server");
     }
   };
 
@@ -69,14 +143,20 @@ export default function App() {
 
       const res = await fetch(`/api/data/${table}?${query.toString()}`);
       const result = await res.json();
-      setData(result);
-      setLocalChanges({}); // Reset local changes on new data
-      setChangeRowId(null);
-      if (result.columns.length > 0 && !filterColumn) {
-        setFilterColumn(result.columns[0].name);
+      if (res.ok) {
+        setData(result);
+        setError(null);
+        setLocalChanges({}); // Reset local changes on new data
+        setChangeRowId(null);
+        if (result.columns.length > 0 && !filterColumn) {
+          setFilterColumn(result.columns[0].name);
+        }
+      } else {
+        setError(result.error || "Failed to fetch data");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to fetch data", err);
+      setError(err.message || "Failed to load data from table");
     } finally {
       setLoading(false);
     }
@@ -86,34 +166,78 @@ export default function App() {
     if (dbLoaded) {
       fetchTables();
     }
-  }, [dbLoaded]);
+  }, [dbLoaded, dbVersion]);
 
   useEffect(() => {
     if (selectedTable) {
       fetchData(selectedTable, filter, filterColumn, page);
     }
+    // Clear history on navigation
+    setHistory({});
+    setRedoStack({});
+    Object.values(historyTimerRef.current).forEach(clearTimeout);
+    historyTimerRef.current = {};
   }, [selectedTable, filter, filterColumn, page]);
+
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        if (data.dbLoaded) {
+          setDbLoaded(true);
+          setDbVersion(v => v + 1);
+        }
+      } catch (err) {
+        console.error("Health check failed", err);
+      }
+    };
+    checkHealth();
+  }, []);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
+    setError(null);
     const formData = new FormData();
     formData.append("database", file);
 
     try {
+      console.log("Starting upload for file:", file.name, "size:", file.size);
       const res = await fetch("/api/upload", {
         method: "POST",
         body: formData,
       });
+      
+      const contentType = res.headers.get("content-type");
+      let result;
+      if (contentType && contentType.includes("application/json")) {
+        result = await res.json();
+      } else {
+        const text = await res.text();
+        console.error("Non-JSON response received:", text);
+        throw new Error(`Server returned non-JSON response (${res.status}): ${text.substring(0, 100)}...`);
+      }
+
+      console.log("Upload response:", result);
+
       if (res.ok) {
         setDbLoaded(true);
+        setDbVersion(v => v + 1);
+        setSelectedTable(""); // Reset selection to force pick first table of new DB
         setPage(0);
         setFocusIndex(0);
+        setFilter("");
+        setSearchInput("");
+        setError(null);
+      } else {
+        setError(result.error || "Failed to upload database");
       }
-    } catch (err) {
-      console.error("Upload failed", err);
+    } catch (err: any) {
+      console.error("Upload failed with exception:", err);
+      setError(err.message || "An unexpected error occurred during upload");
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) {
@@ -151,9 +275,14 @@ export default function App() {
         setData(newData);
         setLocalChanges({});
         setChangeRowId(null);
+        setError(null);
+      } else {
+        const errData = await res.json();
+        setError(errData.error || "Failed to save changes");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Save failed", err);
+      setError(err.message || "Failed to save changes to server");
     }
   };
 
@@ -204,10 +333,13 @@ export default function App() {
       {/* Compact Header */}
       <header className="border-b border-black/5 p-2 pt-6 sm:pt-2 flex items-center justify-between bg-white sticky top-0 z-10 h-16 sm:h-12">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-black text-white flex items-center justify-center rounded">
+          <div className={`w-8 h-8 ${dbLoaded ? 'bg-emerald-500' : 'bg-black'} text-white flex items-center justify-center rounded transition-colors`}>
             <DbIcon size={16} />
           </div>
-          <h1 className="font-serif italic text-lg leading-none hidden sm:block">Editor</h1>
+          <div className="flex flex-col">
+            <h1 className="font-serif italic text-lg leading-none hidden sm:block">Editor</h1>
+            {dbLoaded && <span className="text-[8px] font-mono opacity-50 uppercase mt-1">Database Active</span>}
+          </div>
           
           {dbLoaded && (
             <div className="flex items-center gap-2 ml-4">
@@ -257,7 +389,6 @@ export default function App() {
             type="file" 
             ref={fileInputRef} 
             onChange={handleFileUpload} 
-            accept=".db,.sqlite,.sqlite3,application/x-sqlite3,application/octet-stream" 
             className="fixed -top-full left-0 opacity-0 pointer-events-none" 
           />
 
@@ -275,6 +406,17 @@ export default function App() {
       </header>
 
       <main className="flex-1 flex flex-col overflow-hidden">
+        {error && (
+          <div className="bg-red-50 border-b border-red-100 p-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-red-700 text-xs">
+              <span className="font-bold uppercase">Error:</span>
+              <span>{error}</span>
+            </div>
+            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">
+              <X size={14} />
+            </button>
+          </div>
+        )}
         {selectedTable ? (
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Search & Navigation Bar */}
@@ -408,8 +550,20 @@ export default function App() {
                                   type="text"
                                   value={currentValue}
                                   onChange={(e) => {
-                                    setLocalChanges(prev => ({ ...prev, [col.name]: e.target.value }));
+                                    const newValue = e.target.value;
+                                    setLocalChanges(prev => ({ ...prev, [col.name]: newValue }));
                                     setChangeRowId(currentRowId);
+
+                                    // Debounced history push for typing
+                                    if (historyTimerRef.current[col.name]) clearTimeout(historyTimerRef.current[col.name]);
+                                    historyTimerRef.current[col.name] = setTimeout(() => {
+                                      setHistory(prev => {
+                                        const colHist = prev[col.name] || [];
+                                        if (colHist[colHist.length - 1] === currentValue) return prev;
+                                        return { ...prev, [col.name]: [...colHist, currentValue].slice(-50) };
+                                      });
+                                      setRedoStack(prev => ({ ...prev, [col.name]: [] }));
+                                    }, 1000);
                                   }}
                                   className="w-12 text-center font-mono text-xs font-bold outline-none bg-transparent"
                                 />
@@ -437,40 +591,90 @@ export default function App() {
                             textarea.focus();
 
                             switch (action) {
-                              case 'undo':
-                                document.execCommand('undo');
+                              case 'undo': {
+                                const colHistory = history[col.name] || [];
+                                if (colHistory.length > 0) {
+                                  const prevVal = colHistory[colHistory.length - 1];
+                                  const newHistory = colHistory.slice(0, -1);
+                                  
+                                  setRedoStack(prev => ({
+                                    ...prev,
+                                    [col.name]: [...(prev[col.name] || []), currentValue]
+                                  }));
+                                  setHistory(prev => ({ ...prev, [col.name]: newHistory }));
+                                  setLocalChanges(prev => ({ ...prev, [col.name]: prevVal }));
+                                  setChangeRowId(currentRowId);
+                                }
                                 break;
-                              case 'redo':
-                                document.execCommand('redo');
+                              }
+                              case 'redo': {
+                                const colRedo = redoStack[col.name] || [];
+                                if (colRedo.length > 0) {
+                                  const nextVal = colRedo[colRedo.length - 1];
+                                  const newRedo = colRedo.slice(0, -1);
+
+                                  setHistory(prev => ({
+                                    ...prev,
+                                    [col.name]: [...(prev[col.name] || []), currentValue]
+                                  }));
+                                  setRedoStack(prev => ({ ...prev, [col.name]: newRedo }));
+                                  setLocalChanges(prev => ({ ...prev, [col.name]: nextVal }));
+                                  setChangeRowId(currentRowId);
+                                }
                                 break;
+                              }
                               case 'copy':
                                 const textToCopy = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd) || textarea.value;
                                 await navigator.clipboard.writeText(textToCopy);
                                 break;
-                              case 'paste':
+                              case 'paste': {
                                 const textToPaste = await navigator.clipboard.readText();
+                                // Push to history before change
+                                setHistory(prev => ({
+                                  ...prev,
+                                  [col.name]: [...(prev[col.name] || []), currentValue].slice(-50)
+                                }));
+                                setRedoStack(prev => ({ ...prev, [col.name]: [] }));
+
                                 const start = textarea.selectionStart;
                                 const end = textarea.selectionEnd;
                                 const newValue = textarea.value.substring(0, start) + textToPaste + textarea.value.substring(end);
                                 setLocalChanges(prev => ({ ...prev, [col.name]: newValue }));
                                 setChangeRowId(currentRowId);
                                 break;
-                              case 'delete':
+                              }
+                              case 'delete': {
                                 const s = textarea.selectionStart;
                                 const e = textarea.selectionEnd;
                                 if (s !== e) {
+                                  // Push to history before change
+                                  setHistory(prev => ({
+                                    ...prev,
+                                    [col.name]: [...(prev[col.name] || []), currentValue].slice(-50)
+                                  }));
+                                  setRedoStack(prev => ({ ...prev, [col.name]: [] }));
+
                                   const val = textarea.value.substring(0, s) + textarea.value.substring(e);
                                   setLocalChanges(prev => ({ ...prev, [col.name]: val }));
                                   setChangeRowId(currentRowId);
                                 }
                                 break;
-                              case 'delete-except':
+                              }
+                              case 'delete-except': {
                                 const selection = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
                                 if (selection) {
+                                  // Push to history before change
+                                  setHistory(prev => ({
+                                    ...prev,
+                                    [col.name]: [...(prev[col.name] || []), currentValue].slice(-50)
+                                  }));
+                                  setRedoStack(prev => ({ ...prev, [col.name]: [] }));
+
                                   setLocalChanges(prev => ({ ...prev, [col.name]: selection }));
                                   setChangeRowId(currentRowId);
                                 }
                                 break;
+                              }
                             }
                           };
 
@@ -500,17 +704,28 @@ export default function App() {
                               </div>
                               
                               <div className="relative">
-                                <textarea
+                                <HighlightedTextarea
                                   id={`textarea-${col.name}`}
                                   dir="rtl"
                                   value={currentValue}
-                                  onChange={(e) => {
-                                    setLocalChanges(prev => ({ ...prev, [col.name]: e.target.value }));
-                                    setChangeRowId(currentRowId);
-                                  }}
-                                  style={{ fontSize: `${fontSize}px` }}
-                                  className="w-full p-6 sm:p-10 bg-transparent outline-none min-h-[600px] leading-relaxed resize-none font-sans text-right"
+                                  fontSize={fontSize}
                                   placeholder={`Enter ${col.name}...`}
+                                  onChange={(e) => {
+                                    const newValue = e.target.value;
+                                    setLocalChanges(prev => ({ ...prev, [col.name]: newValue }));
+                                    setChangeRowId(currentRowId);
+
+                                    // Debounced history push for typing
+                                    if (historyTimerRef.current[col.name]) clearTimeout(historyTimerRef.current[col.name]);
+                                    historyTimerRef.current[col.name] = setTimeout(() => {
+                                      setHistory(prev => {
+                                        const colHist = prev[col.name] || [];
+                                        if (colHist[colHist.length - 1] === currentValue) return prev;
+                                        return { ...prev, [col.name]: [...colHist, currentValue].slice(-50) };
+                                      });
+                                      setRedoStack(prev => ({ ...prev, [col.name]: [] }));
+                                    }, 1000);
+                                  }}
                                 />
                               </div>
                             </div>
