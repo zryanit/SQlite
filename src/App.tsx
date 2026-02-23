@@ -24,6 +24,7 @@ export default function App() {
   const [data, setData] = useState<TableData | null>(null);
   const [fontSize, setFontSize] = useState(18);
   const [filter, setFilter] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [filterColumn, setFilterColumn] = useState("");
   const [loading, setLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -37,6 +38,9 @@ export default function App() {
   
   // Track local changes for auto-save
   const [localChanges, setLocalChanges] = useState<Record<string, string>>({});
+  const [changeRowId, setChangeRowId] = useState<any>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchTables = async () => {
     try {
@@ -67,6 +71,7 @@ export default function App() {
       const result = await res.json();
       setData(result);
       setLocalChanges({}); // Reset local changes on new data
+      setChangeRowId(null);
       if (result.columns.length > 0 && !filterColumn) {
         setFilterColumn(result.columns[0].name);
       }
@@ -111,7 +116,9 @@ export default function App() {
       console.error("Upload failed", err);
     } finally {
       setIsUploading(false);
-      e.target.value = ""; // Reset to allow re-uploading same file
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""; // Reset to allow re-uploading same file
+      }
     }
   };
 
@@ -119,15 +126,19 @@ export default function App() {
     if (!data || !selectedTable || Object.keys(changes).length === 0) return;
     
     const row = data.rows[rowIdx];
-    const pkColumn = data.columns.find(c => c.pk === 1) || data.columns[0];
+    const pkColumn = data.columns.find(c => c.pk === 1);
+    
+    // Use PK if available, otherwise fallback to our injected _rowid_
+    const idColumn = pkColumn ? pkColumn.name : "_rowid_";
+    const idValue = pkColumn ? row[pkColumn.name] : row._rowid_;
     
     try {
       const res = await fetch(`/api/update/${selectedTable}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          idColumn: pkColumn.name,
-          idValue: row[pkColumn.name],
+          idColumn,
+          idValue,
           updates: changes
         }),
       });
@@ -139,6 +150,7 @@ export default function App() {
         });
         setData(newData);
         setLocalChanges({});
+        setChangeRowId(null);
       }
     } catch (err) {
       console.error("Save failed", err);
@@ -166,8 +178,14 @@ export default function App() {
     }
   };
 
-  const jumpToSurahAyat = () => {
+  const jumpToSurahAyat = async () => {
     if (!surahInput || !ayatInput) return;
+    
+    // Auto-save before jumping
+    if (Object.keys(localChanges).length > 0) {
+      await saveChanges(focusIndex, localChanges);
+    }
+
     const surahCol = data?.columns.find(c => c.name.toLowerCase().includes('sura'))?.name;
     if (surahCol) {
       setFilterColumn(surahCol);
@@ -196,8 +214,12 @@ export default function App() {
               <span className="text-[10px] uppercase tracking-widest opacity-40 font-mono">Table:</span>
               <select 
                 value={selectedTable}
-                onChange={(e) => {
-                  setSelectedTable(e.target.value);
+                onChange={async (e) => {
+                  const newTable = e.target.value;
+                  if (Object.keys(localChanges).length > 0) {
+                    await saveChanges(focusIndex, localChanges);
+                  }
+                  setSelectedTable(newTable);
                   setPage(0);
                   setFocusIndex(0);
                 }}
@@ -223,19 +245,21 @@ export default function App() {
             <span className="text-[9px] font-mono w-6">{fontSize}px</span>
           </div>
 
-          <label
-            className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center gap-1 cursor-pointer"
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="p-3 sm:p-1.5 hover:bg-black/5 rounded-full sm:rounded transition-colors flex items-center justify-center gap-1"
             title="Load Database"
           >
             <Upload size={20} className={isUploading ? "animate-bounce" : ""} />
             <span className="text-[10px] font-bold uppercase hidden sm:inline">Load</span>
-            <input 
-              type="file" 
-              onChange={handleFileUpload} 
-              accept=".db,.sqlite,.sqlite3,application/x-sqlite3,application/octet-stream,*/*" 
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
-            />
-          </label>
+          </button>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileUpload} 
+            accept=".db,.sqlite,.sqlite3,application/x-sqlite3,application/octet-stream" 
+            className="fixed -top-full left-0 opacity-0 pointer-events-none" 
+          />
 
           {dbLoaded && (
             <button
@@ -268,8 +292,28 @@ export default function App() {
                   dir="rtl"
                   type="text"
                   placeholder="Search..."
-                  value={filter}
-                  onChange={(e) => { setFilter(e.target.value); setPage(0); setFocusIndex(0); }}
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter') {
+                      if (Object.keys(localChanges).length > 0) {
+                        await saveChanges(focusIndex, localChanges);
+                      }
+                      setFilter(searchInput);
+                      setPage(0);
+                      setFocusIndex(0);
+                    }
+                  }}
+                  onBlur={async (e) => {
+                    if (searchInput !== filter) {
+                      if (Object.keys(localChanges).length > 0) {
+                        await saveChanges(focusIndex, localChanges);
+                      }
+                      setFilter(searchInput);
+                      setPage(0);
+                      setFocusIndex(0);
+                    }
+                  }}
                   className="flex-1 bg-transparent outline-none text-xs text-right"
                 />
               </div>
@@ -350,14 +394,23 @@ export default function App() {
                             const name = col.name.toLowerCase();
                             return name.includes('id') || name.includes('sura') || name.includes('aya') || name.includes('verse') || name.includes('chapter');
                           }).map(col => {
-                            const currentValue = localChanges[col.name] !== undefined ? localChanges[col.name] : (data.rows[focusIndex][col.name] || "");
+                            const pkCol = data.columns.find(c => c.pk === 1);
+                            const currentRow = data.rows[focusIndex];
+                            const currentRowId = pkCol ? currentRow[pkCol.name] : currentRow._rowid_;
+                            const currentValue = (changeRowId === currentRowId && localChanges[col.name] !== undefined) 
+                              ? localChanges[col.name] 
+                              : (currentRow[col.name] || "");
+
                             return (
                               <div key={col.name} className="bg-white px-3 py-1.5 rounded-lg border border-black/5 shadow-sm flex items-center gap-2">
                                 <span className="text-[9px] font-mono opacity-40 uppercase tracking-tighter">{col.name}</span>
                                 <input
                                   type="text"
                                   value={currentValue}
-                                  onChange={(e) => setLocalChanges(prev => ({ ...prev, [col.name]: e.target.value }))}
+                                  onChange={(e) => {
+                                    setLocalChanges(prev => ({ ...prev, [col.name]: e.target.value }));
+                                    setChangeRowId(currentRowId);
+                                  }}
                                   className="w-12 text-center font-mono text-xs font-bold outline-none bg-transparent"
                                 />
                               </div>
@@ -370,7 +423,12 @@ export default function App() {
                           const name = col.name.toLowerCase();
                           return !(name.includes('id') || name.includes('sura') || name.includes('aya') || name.includes('verse') || name.includes('chapter'));
                         }).map(col => {
-                          const currentValue = localChanges[col.name] !== undefined ? localChanges[col.name] : (data.rows[focusIndex][col.name] || "");
+                          const pkCol = data.columns.find(c => c.pk === 1);
+                          const currentRow = data.rows[focusIndex];
+                          const currentRowId = pkCol ? currentRow[pkCol.name] : currentRow._rowid_;
+                          const currentValue = (changeRowId === currentRowId && localChanges[col.name] !== undefined) 
+                            ? localChanges[col.name] 
+                            : (currentRow[col.name] || "");
                           
                           const handleToolbarAction = async (action: string) => {
                             const textarea = document.getElementById(`textarea-${col.name}`) as HTMLTextAreaElement;
@@ -395,6 +453,7 @@ export default function App() {
                                 const end = textarea.selectionEnd;
                                 const newValue = textarea.value.substring(0, start) + textToPaste + textarea.value.substring(end);
                                 setLocalChanges(prev => ({ ...prev, [col.name]: newValue }));
+                                setChangeRowId(currentRowId);
                                 break;
                               case 'delete':
                                 const s = textarea.selectionStart;
@@ -402,12 +461,14 @@ export default function App() {
                                 if (s !== e) {
                                   const val = textarea.value.substring(0, s) + textarea.value.substring(e);
                                   setLocalChanges(prev => ({ ...prev, [col.name]: val }));
+                                  setChangeRowId(currentRowId);
                                 }
                                 break;
                               case 'delete-except':
                                 const selection = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
                                 if (selection) {
                                   setLocalChanges(prev => ({ ...prev, [col.name]: selection }));
+                                  setChangeRowId(currentRowId);
                                 }
                                 break;
                             }
@@ -418,15 +479,14 @@ export default function App() {
                               <div className="bg-black/[0.02] px-4 py-2 border-b border-black/5 flex items-center justify-between flex-wrap gap-2">
                                 <div className="flex items-center gap-2">
                                   <span className="col-header text-[10px]">{col.name}</span>
-                                  {localChanges[col.name] !== undefined && (
+                                  {changeRowId === currentRowId && localChanges[col.name] !== undefined && (
                                     <div className="flex items-center gap-1.5">
                                       <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
                                       <span className="text-[8px] font-mono opacity-40 uppercase">Unsaved</span>
                                     </div>
                                   )}
                                 </div>
-
-                                {/* Toolbar Buttons (Right to Left order requested: Delete Except, Delete, Paste, Copy, Redo, Undo) */}
+                                {/* ... toolbar ... */}
                                 <div className="flex items-center gap-1 bg-white/50 p-1 rounded-lg border border-black/5">
                                   <button onClick={() => handleToolbarAction('undo')} className="p-2 hover:bg-black hover:text-white rounded transition-all" title="Undo"><Undo2 size={18} /></button>
                                   <button onClick={() => handleToolbarAction('redo')} className="p-2 hover:bg-black hover:text-white rounded transition-all" title="Redo"><Redo2 size={18} /></button>
@@ -444,7 +504,10 @@ export default function App() {
                                   id={`textarea-${col.name}`}
                                   dir="rtl"
                                   value={currentValue}
-                                  onChange={(e) => setLocalChanges(prev => ({ ...prev, [col.name]: e.target.value }))}
+                                  onChange={(e) => {
+                                    setLocalChanges(prev => ({ ...prev, [col.name]: e.target.value }));
+                                    setChangeRowId(currentRowId);
+                                  }}
                                   style={{ fontSize: `${fontSize}px` }}
                                   className="w-full p-6 sm:p-10 bg-transparent outline-none min-h-[600px] leading-relaxed resize-none font-sans text-right"
                                   placeholder={`Enter ${col.name}...`}

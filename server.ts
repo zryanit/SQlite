@@ -68,7 +68,7 @@ async function startServer() {
     const { filter, column, limit = 100, offset = 0 } = req.query;
 
     try {
-      let query = `SELECT * FROM "${table}"`;
+      let query = `SELECT rowid as _rowid_, * FROM "${table}"`;
       const params: any[] = [];
 
       if (filter && column) {
