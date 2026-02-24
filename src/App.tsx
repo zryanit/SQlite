@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2, Undo2, Redo2, Copy, ClipboardPaste, Trash2, Eraser, X, Wand2 } from "lucide-react";
+import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2, Undo2, Redo2, Copy, ClipboardPaste, Trash2, Eraser, X, Wand2, Play, Square } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface Column {
@@ -98,6 +98,8 @@ export default function App() {
 
   // Focus Mode is now the only mode
   const [focusIndex, setFocusIndex] = useState(0);
+  const [isLooping, setIsLooping] = useState(false);
+  const loopTimerRef = useRef<any>(null);
   const [surahInput, setSurahInput] = useState("");
   const [ayatInput, setAyatInput] = useState("");
   
@@ -110,6 +112,8 @@ export default function App() {
 
   const localChangesRef = useRef(localChanges);
   const focusIndexRef = useRef(focusIndex);
+  const dataRef = useRef(data);
+  const changeRowIdRef = useRef(changeRowId);
 
   useEffect(() => {
     localChangesRef.current = localChanges;
@@ -118,6 +122,14 @@ export default function App() {
   useEffect(() => {
     focusIndexRef.current = focusIndex;
   }, [focusIndex]);
+
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
+  useEffect(() => {
+    changeRowIdRef.current = changeRowId;
+  }, [changeRowId]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -258,10 +270,13 @@ export default function App() {
   };
 
   const saveChanges = async (rowIdx: number, changes: Record<string, string>) => {
-    if (!data || !selectedTable || Object.keys(changes).length === 0) return;
+    const currentData = dataRef.current;
+    if (!currentData || !selectedTable || Object.keys(changes).length === 0) return;
     
-    const row = data.rows[rowIdx];
-    const pkColumn = data.columns.find(c => c.pk === 1);
+    const row = currentData.rows[rowIdx];
+    if (!row) return;
+
+    const pkColumn = currentData.columns.find(c => c.pk === 1);
     
     // Use PK if available, otherwise fallback to our injected _rowid_
     const idColumn = pkColumn ? pkColumn.name : "_rowid_";
@@ -279,11 +294,13 @@ export default function App() {
       });
 
       if (res.ok) {
-        const newData = { ...data };
-        Object.keys(changes).forEach(col => {
-          newData.rows[rowIdx][col] = changes[col];
+        setData(prevData => {
+          if (!prevData) return null;
+          const newData = { ...prevData };
+          newData.rows = [...newData.rows];
+          newData.rows[rowIdx] = { ...newData.rows[rowIdx], ...changes };
+          return newData;
         });
-        setData(newData);
         setLocalChanges({});
         setChangeRowId(null);
         setError(null);
@@ -298,26 +315,58 @@ export default function App() {
   };
 
   const handleNavigate = async (direction: 'next' | 'prev') => {
-    if (!data) return;
+    const currentData = dataRef.current;
+    if (!currentData) return;
 
     const currentChanges = localChangesRef.current;
     const currentIdx = focusIndexRef.current;
+    const currentRow = currentData.rows[currentIdx];
+    
+    if (currentRow) {
+      const pkCol = currentData.columns.find(c => c.pk === 1);
+      const currentRowId = pkCol ? currentRow[pkCol.name] : currentRow._rowid_;
 
-    // Auto-save current changes before navigating
-    if (Object.keys(currentChanges).length > 0) {
-      await saveChanges(currentIdx, currentChanges);
+      // Auto-save current changes before navigating, but ONLY if they match the current row
+      if (Object.keys(currentChanges).length > 0 && changeRowIdRef.current === currentRowId) {
+        await saveChanges(currentIdx, currentChanges);
+      }
     }
 
     const nextIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
     
-    if (nextIdx >= 0 && nextIdx < data.rows.length) {
+    if (nextIdx >= 0 && nextIdx < currentData.rows.length) {
       setFocusIndex(nextIdx);
-    } else if (direction === 'next' && (page + 1) * pageSize < data.total) {
+    } else if (direction === 'next' && (page + 1) * pageSize < currentData.total) {
       setPage(page + 1);
       setFocusIndex(0);
+    } else if (direction === 'next' && filterColumn && filter) {
+      // Cross-Surah navigation: if we are filtered by Surah, move to the next one
+      const surahCol = currentData.columns.find(c => c.name.toLowerCase().includes('sura'))?.name;
+      if (filterColumn === surahCol) {
+        const currentSurah = parseInt(filter);
+        if (!isNaN(currentSurah) && currentSurah < 114) {
+          setFilter((currentSurah + 1).toString());
+          setPage(0);
+          setFocusIndex(0);
+        }
+      }
     } else if (direction === 'prev' && page > 0) {
       setPage(page - 1);
       setFocusIndex(pageSize - 1);
+    } else if (direction === 'prev' && filterColumn && filter) {
+      // Cross-Surah navigation backwards
+      const surahCol = currentData.columns.find(c => c.name.toLowerCase().includes('sura'))?.name;
+      if (filterColumn === surahCol) {
+        const currentSurah = parseInt(filter);
+        if (!isNaN(currentSurah) && currentSurah > 1) {
+          setFilter((currentSurah - 1).toString());
+          // We don't know the exact last page of the previous surah easily without fetching,
+          // so we just go to the first page for now. 
+          // A more complex implementation would fetch the count first.
+          setPage(0);
+          setFocusIndex(0);
+        }
+      }
     }
   };
 
@@ -338,6 +387,83 @@ export default function App() {
     }
   };
 
+  // Loop Logic
+  useEffect(() => {
+    if (!isLooping || !data) {
+      if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
+      return;
+    }
+
+    const runLoopStep = async () => {
+      // Stop if loop was disabled or we are loading new data
+      if (!isLooping || loading) {
+        if (isLooping) loopTimerRef.current = setTimeout(runLoopStep, 500);
+        return;
+      }
+      
+      const currentData = dataRef.current;
+      if (!currentData) return;
+
+      const currentIdx = focusIndexRef.current;
+      const currentRow = currentData.rows[currentIdx];
+      
+      if (!currentRow) {
+        setIsLooping(false);
+        return;
+      }
+
+      // Find the first content column to apply magic extract
+      const targetCol = currentData.columns.find(col => {
+        const name = col.name.toLowerCase();
+        return !(name.includes('id') || name.includes('sura') || name.includes('aya') || name.includes('verse') || name.includes('chapter'));
+      });
+
+      if (!targetCol) {
+        setIsLooping(false);
+        return;
+      }
+
+      const text = currentRow[targetCol.name] || "";
+      const match = text.match(/\(\s*[\d\u0660-\u0669\u06F0-\u06F9]+\s*\)\s*(.*?[.…])/);
+      
+      // Clear any stale local changes before processing
+      setLocalChanges({});
+      setChangeRowId(null);
+
+      if (match) {
+        const result = match[1].trim();
+        // Apply change directly to DB
+        await saveChanges(currentIdx, { [targetCol.name]: result });
+      }
+
+      // Check if we can move to next
+      const isLastRow = (page + 1) * pageSize >= currentData.total && currentIdx === currentData.rows.length - 1;
+      
+      if (isLastRow) {
+        // Check if we can move to next Surah
+        const surahCol = currentData.columns.find(c => c.name.toLowerCase().includes('sura'))?.name;
+        if (filterColumn === surahCol && !isNaN(parseInt(filter)) && parseInt(filter) < 114) {
+          // handleNavigate('next') will handle the filter change
+          await handleNavigate('next');
+          loopTimerRef.current = setTimeout(runLoopStep, 1500);
+        } else {
+          setIsLooping(false);
+        }
+      } else {
+        // Navigate to next (handleNavigate is now safer)
+        await handleNavigate('next');
+        // Schedule next step with a slight delay to allow state to settle
+        loopTimerRef.current = setTimeout(runLoopStep, 1000);
+      }
+    };
+
+    loopTimerRef.current = setTimeout(runLoopStep, 1000);
+
+    return () => {
+      if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
+    };
+  }, [isLooping, data?.rows.length, page, loading, filter, filterColumn]);
+
   const handleDownload = () => {
     window.location.href = "/api/download";
   };
@@ -357,6 +483,19 @@ export default function App() {
           
           {dbLoaded && (
             <div className="flex items-center gap-2 ml-4">
+              <button
+                onClick={() => setIsLooping(!isLooping)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all shadow-sm ${
+                  isLooping 
+                    ? 'bg-red-500 text-white hover:bg-red-600 animate-pulse' 
+                    : 'bg-emerald-500 text-white hover:bg-emerald-600'
+                }`}
+                title={isLooping ? "Stop Loop" : "Start Magic Loop"}
+              >
+                {isLooping ? <Square size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}
+                <span>{isLooping ? "Stop Loop" : "Magic Loop"}</span>
+              </button>
+              <div className="w-px h-6 bg-black/10 mx-1" />
               <span className="text-[10px] uppercase tracking-widest opacity-40 font-mono">Table:</span>
               <select 
                 value={selectedTable}
@@ -691,9 +830,9 @@ export default function App() {
                               }
                               case 'extract-pattern': {
                                 const text = textarea.value;
-                                // Pattern: ( any number ) followed by text till the first .
+                                // Pattern: ( any number ) followed by text till the first . or …
                                 // We capture the part after the parentheses
-                                const match = text.match(/\(\s*[\d\u0660-\u0669\u06F0-\u06F9]+\s*\)\s*(.*?\.)/);
+                                const match = text.match(/\(\s*[\d\u0660-\u0669\u06F0-\u06F9]+\s*\)\s*(.*?[.…])/);
                                 if (match) {
                                   const result = match[1].trim();
                                   
