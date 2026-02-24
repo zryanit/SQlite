@@ -371,19 +371,34 @@ export default function App() {
   };
 
   const jumpToSurahAyat = async () => {
-    if (!surahInput || !ayatInput) return;
+    if (!surahInput || !ayatInput || !selectedTable) return;
     
     // Auto-save before jumping
     if (Object.keys(localChanges).length > 0) {
       await saveChanges(focusIndex, localChanges);
     }
 
-    const surahCol = data?.columns.find(c => c.name.toLowerCase().includes('sura'))?.name;
-    if (surahCol) {
-      setFilterColumn(surahCol);
-      setFilter(surahInput);
-      setPage(0);
-      setFocusIndex(0);
+    try {
+      // Clear filters first to ensure we can find the verse globally
+      setFilter("");
+      setSearchInput("");
+      
+      const res = await fetch(`/api/find-offset/${selectedTable}?sura=${surahInput}&aya=${ayatInput}`);
+      const result = await res.json();
+      
+      if (res.ok) {
+        const offset = result.offset;
+        const newPage = Math.floor(offset / pageSize);
+        const newIndex = offset % pageSize;
+        
+        setPage(newPage);
+        setFocusIndex(newIndex);
+        setError(null);
+      } else {
+        setError(result.error || "Could not find verse");
+      }
+    } catch (err: any) {
+      setError("Failed to jump to verse");
     }
   };
 
@@ -613,23 +628,33 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex items-center gap-1 bg-black/5 p-1 rounded">
-                <input 
-                  type="number" 
-                  placeholder="S" 
-                  value={surahInput}
-                  onChange={(e) => setSurahInput(e.target.value)}
-                  className="w-10 px-1 py-0.5 text-[10px] rounded border-none outline-none"
-                />
-                <input 
-                  type="number" 
-                  placeholder="A" 
-                  value={ayatInput}
-                  onChange={(e) => setAyatInput(e.target.value)}
-                  className="w-10 px-1 py-0.5 text-[10px] rounded border-none outline-none"
-                />
-                <button onClick={jumpToSurahAyat} className="p-1 hover:bg-black hover:text-white rounded transition-colors">
-                  <ChevronRight size={12} />
+              <div className="flex items-center gap-1 bg-black/5 p-1.5 rounded-lg border border-black/5 shadow-inner">
+                <div className="flex flex-col items-center px-1 border-r border-black/10">
+                  <span className="text-[8px] uppercase opacity-60 font-black leading-none mb-1">Surah</span>
+                  <input 
+                    type="number" 
+                    placeholder="001" 
+                    value={surahInput}
+                    onChange={(e) => setSurahInput(e.target.value)}
+                    className="w-12 px-1 py-1 text-xs rounded bg-white border border-black/5 outline-none text-center font-mono font-bold"
+                  />
+                </div>
+                <div className="flex flex-col items-center px-1">
+                  <span className="text-[8px] uppercase opacity-60 font-black leading-none mb-1">Verse</span>
+                  <input 
+                    type="number" 
+                    placeholder="001" 
+                    value={ayatInput}
+                    onChange={(e) => setAyatInput(e.target.value)}
+                    className="w-12 px-1 py-1 text-xs rounded bg-white border border-black/5 outline-none text-center font-mono font-bold"
+                  />
+                </div>
+                <button 
+                  onClick={jumpToSurahAyat} 
+                  className="ml-1 p-2 bg-black text-white hover:bg-emerald-600 rounded-md transition-all shadow-sm flex items-center justify-center"
+                  title="Jump to Verse"
+                >
+                  <ChevronRight size={16} />
                 </button>
               </div>
 
@@ -683,6 +708,37 @@ export default function App() {
                         transition={{ duration: 0.15 }}
                         className="space-y-4"
                       >
+                        {/* Verse Info Header */}
+                        <div className="flex items-center justify-between bg-black text-white px-6 py-3 rounded-2xl shadow-lg">
+                          <div className="flex items-center gap-6">
+                            <div className="flex flex-col">
+                              <span className="text-[8px] uppercase opacity-50 font-black tracking-widest">Surah ID</span>
+                              <span className="text-xl font-serif italic">
+                                {data.rows[focusIndex][data.columns.find(c => {
+                                  const n = c.name.toLowerCase();
+                                  return n.includes('sura') || n.includes('chapter') || n === 's_id' || n === 'sid';
+                                })?.name || ""] || "—"}
+                              </span>
+                            </div>
+                            <div className="w-px h-8 bg-white/10" />
+                            <div className="flex flex-col">
+                              <span className="text-[8px] uppercase opacity-50 font-black tracking-widest">Verse ID</span>
+                              <span className="text-xl font-serif italic">
+                                {data.rows[focusIndex][data.columns.find(c => {
+                                  const n = c.name.toLowerCase();
+                                  return n.includes('aya') || n.includes('verse') || n === 'v_id' || n === 'vid';
+                                })?.name || ""] || "—"}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <span className="text-[8px] uppercase opacity-50 font-black tracking-widest">Global Progress</span>
+                            <span className="text-xs font-mono">
+                              {Math.round(((focusIndex + 1 + (page * pageSize)) / data.total) * 100)}% Complete
+                            </span>
+                          </div>
+                        </div>
+
                         {/* ID / Meta Columns Row (Tiny) */}
                         <div className="flex flex-wrap gap-2">
                           {data.columns.filter(col => {

@@ -165,11 +165,23 @@ async function startServer() {
 
     try {
       const columns = currentDb.prepare(`PRAGMA table_info("${table}")`).all();
-      const suraCol = columns.find((c: any) => c.name.toLowerCase().includes('sura'))?.name;
-      const ayaCol = columns.find((c: any) => c.name.toLowerCase().includes('aya'))?.name;
+      
+      // Broaden search for Surah/Ayat columns
+      const suraCol = columns.find((c: any) => {
+        const n = c.name.toLowerCase();
+        return n.includes('sura') || n.includes('chapter') || n === 's_id' || n === 'sid' || n === 'c_id';
+      })?.name;
+      
+      const ayaCol = columns.find((c: any) => {
+        const n = c.name.toLowerCase();
+        return n.includes('aya') || n.includes('verse') || n === 'v_id' || n === 'vid' || n === 'a_id';
+      })?.name;
 
       if (!suraCol || !ayaCol) {
-        return res.status(400).json({ error: "Could not identify Surah/Ayat columns" });
+        return res.status(400).json({ 
+          error: "Could not identify Surah/Ayat columns",
+          foundColumns: columns.map((c: any) => c.name)
+        });
       }
 
       // Calculate the number of rows before the target Surah/Ayat
