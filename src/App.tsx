@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2, Undo2, Redo2, Copy, ClipboardPaste, Trash2, Eraser, X } from "lucide-react";
+import { Upload, Download, Table as TableIcon, Search, Type, Save, ChevronRight, ChevronLeft, Database as DbIcon, BookOpen, Settings2, Undo2, Redo2, Copy, ClipboardPaste, Trash2, Eraser, X, Wand2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface Column {
@@ -107,6 +107,17 @@ export default function App() {
   const [history, setHistory] = useState<Record<string, string[]>>({});
   const [redoStack, setRedoStack] = useState<Record<string, string[]>>({});
   const historyTimerRef = useRef<Record<string, any>>({});
+
+  const localChangesRef = useRef(localChanges);
+  const focusIndexRef = useRef(focusIndex);
+
+  useEffect(() => {
+    localChangesRef.current = localChanges;
+  }, [localChanges]);
+
+  useEffect(() => {
+    focusIndexRef.current = focusIndex;
+  }, [focusIndex]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -289,12 +300,15 @@ export default function App() {
   const handleNavigate = async (direction: 'next' | 'prev') => {
     if (!data) return;
 
+    const currentChanges = localChangesRef.current;
+    const currentIdx = focusIndexRef.current;
+
     // Auto-save current changes before navigating
-    if (Object.keys(localChanges).length > 0) {
-      await saveChanges(focusIndex, localChanges);
+    if (Object.keys(currentChanges).length > 0) {
+      await saveChanges(currentIdx, currentChanges);
     }
 
-    const nextIdx = direction === 'next' ? focusIndex + 1 : focusIndex - 1;
+    const nextIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
     
     if (nextIdx >= 0 && nextIdx < data.rows.length) {
       setFocusIndex(nextIdx);
@@ -675,6 +689,31 @@ export default function App() {
                                 }
                                 break;
                               }
+                              case 'extract-pattern': {
+                                const text = textarea.value;
+                                // Pattern: ( any number ) followed by text till the first .
+                                // We capture the part after the parentheses
+                                const match = text.match(/\(\s*[\d\u0660-\u0669\u06F0-\u06F9]+\s*\)\s*(.*?\.)/);
+                                if (match) {
+                                  const result = match[1].trim();
+                                  
+                                  // Push to history before change
+                                  setHistory(prev => ({
+                                    ...prev,
+                                    [col.name]: [...(prev[col.name] || []), currentValue].slice(-50)
+                                  }));
+                                  setRedoStack(prev => ({ ...prev, [col.name]: [] }));
+
+                                  setLocalChanges(prev => ({ ...prev, [col.name]: result }));
+                                  setChangeRowId(currentRowId);
+
+                                  // Wait 1 second and then go to next row
+                                  setTimeout(() => {
+                                    handleNavigate('next');
+                                  }, 1000);
+                                }
+                                break;
+                              }
                             }
                           };
 
@@ -700,6 +739,8 @@ export default function App() {
                                   <div className="w-px h-6 bg-black/10 mx-1" />
                                   <button onClick={() => handleToolbarAction('delete')} className="p-2 hover:bg-red-500 hover:text-white rounded transition-all" title="Delete Selected Text"><Trash2 size={18} /></button>
                                   <button onClick={() => handleToolbarAction('delete-except')} className="p-2 hover:bg-red-500 hover:text-white rounded transition-all" title="Delete All Except Selected"><Eraser size={18} /></button>
+                                  <div className="w-px h-6 bg-black/10 mx-1" />
+                                  <button onClick={() => handleToolbarAction('extract-pattern')} className="p-2 hover:bg-emerald-500 hover:text-white rounded transition-all text-emerald-600" title="Extract (Number)... and Next"><Wand2 size={18} /></button>
                                 </div>
                               </div>
                               
